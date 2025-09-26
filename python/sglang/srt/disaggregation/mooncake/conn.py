@@ -36,8 +36,9 @@ from sglang.srt.utils import (
     get_int_env_var,
     is_valid_ipv6_address,
 )
-
+import sglang.srt.disaggregation.trace_utils as trace_utils
 logger = logging.getLogger(__name__)
+trace_logger = trace_utils.get_event_logger()
 
 
 class KVTransferError(Exception):
@@ -194,6 +195,7 @@ class MooncakeKVManager(CommonKVManager):
             self.enable_custom_mem_pool = get_bool_env_var(
                 "SGLANG_MOONCAKE_CUSTOM_MEM_POOL", "false"
             )
+            trace_logger.log_file = f"events_P_{self.dp_rank}.log"
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
             self.heartbeat_failures = {}
             self.session_pool = defaultdict(requests.Session)
@@ -215,6 +217,7 @@ class MooncakeKVManager(CommonKVManager):
             self.waiting_timeout = get_int_env_var(
                 "SGLANG_DISAGGREGATION_WAITING_TIMEOUT", 300
             )
+            trace_logger.log_file = f"events_D_{self.dp_rank}.log"
 
         self.failure_records: Dict[int, str] = {}
         self.failure_lock = threading.Lock()
@@ -780,6 +783,7 @@ class MooncakeKVManager(CommonKVManager):
                     logger.debug(
                         f"Register KVArgs from {mooncake_session_id} successfully"
                     )
+                    trace_logger.mark(room, "register_kv_args_ack")
                     continue
                 else:
                     required_dst_info_num = int(waiting_req_bytes[6].decode("ascii"))
@@ -793,6 +797,7 @@ class MooncakeKVManager(CommonKVManager):
                     # NOTE: after bootstrapping we can mark the req as waiting for input
                     if len(self.transfer_infos[room]) == required_dst_info_num:
                         self.update_status(room, KVPoll.WaitingForInput)
+                    trace_logger.mark(room, "init_recv_ack")
 
         threading.Thread(target=bootstrap_thread).start()
 
@@ -822,6 +827,7 @@ class MooncakeKVManager(CommonKVManager):
                         )
                         if arrived_response_num == expected_response_num:
                             self.update_status(bootstrap_room, KVPoll.Success)
+                            trace_logger.mark(bootstrap_room, "recv_kv_cache")
                 elif status == KVPoll.Failed:
                     self.record_failure(
                         bootstrap_room,
@@ -1149,6 +1155,7 @@ class MooncakeKVReceiver(CommonKVReceiver):
                         dst_kv_item_len,
                     ]
                 )
+                trace_logger.mark(self.bootstrap_room, "register_kv_args")
 
     def init(self, kv_indices: npt.NDArray[np.int32], aux_index: Optional[int] = None):
         for bootstrap_info in self.bootstrap_infos:
@@ -1167,6 +1174,8 @@ class MooncakeKVReceiver(CommonKVReceiver):
                         str(self.required_dst_info_num).encode("ascii"),
                     ]
                 )
+                trace_logger.mark(self.bootstrap_room, "init_recv")
+
         self.init_time = time.time()
 
     def poll(self) -> KVPoll:
