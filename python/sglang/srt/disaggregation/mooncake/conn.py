@@ -195,7 +195,7 @@ class MooncakeKVManager(CommonKVManager):
             self.enable_custom_mem_pool = get_bool_env_var(
                 "SGLANG_MOONCAKE_CUSTOM_MEM_POOL", "false"
             )
-            trace_logger.log_file = f"events_P_{self.dp_rank}.log"
+            trace_logger.log_file = f"events_P_{self.attn_dp_rank}.log"
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
             self.heartbeat_failures = {}
             self.session_pool = defaultdict(requests.Session)
@@ -217,7 +217,7 @@ class MooncakeKVManager(CommonKVManager):
             self.waiting_timeout = get_int_env_var(
                 "SGLANG_DISAGGREGATION_WAITING_TIMEOUT", 300
             )
-            trace_logger.log_file = f"events_D_{self.dp_rank}.log"
+            trace_logger.log_file = f"events_D_{self.attn_dp_rank}.log"
 
         self.failure_records: Dict[int, str] = {}
         self.failure_lock = threading.Lock()
