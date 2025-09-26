@@ -669,7 +669,7 @@ class DecodeTransferQueue:
             idx = self.queue[i].metadata_buffer_index
             assert idx != -1
             self.queue[i].req.add_latency(RequestStage.DECODE_TRANSFERRED)
-            trace_logger.mark(self.queue[i].req.rid, "DECODE_TRANSFERRED")
+            trace_logger.mark(self.queue[i].req.bootstrap_room, "DECODE_TRANSFERRED")
             self.req_to_metadata_buffer_idx_allocator.free(idx)
 
         self.queue = [
