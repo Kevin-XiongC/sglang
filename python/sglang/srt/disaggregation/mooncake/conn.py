@@ -39,7 +39,7 @@ from sglang.srt.utils import (
 import sglang.srt.disaggregation.trace_utils as trace_utils
 logger = logging.getLogger(__name__)
 import torch
-trace_logger = None
+trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{torch.cuda.current_device()}")
 
 class KVTransferError(Exception):
     def __init__(self, bootstrap_room: int, failure_reason: str):
