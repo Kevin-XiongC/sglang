@@ -64,7 +64,7 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import KVCache
 
 logger = logging.getLogger(__name__)
-trace_logger = trace_utils.get_event_logger()
+trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{torch.cuda.current_device()}")
 
 class PrefillBootstrapQueue:
     """

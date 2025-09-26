@@ -54,7 +54,7 @@ from sglang.srt.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils import get_int_env_var, require_mlp_sync
 
 logger = logging.getLogger(__name__)
-trace_logger = trace_utils.get_event_logger()
+trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{torch.cuda.current_device()}")
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
