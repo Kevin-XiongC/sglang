@@ -124,7 +124,7 @@ class PrefillBootstrapQueue:
             self.token_to_kv_pool.get_contiguous_buf_infos()
         )
         global trace_logger
-        trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{kv_args.gpu_id}")
+        trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{self.scheduler.dp_rank}")
         if self.draft_token_to_kv_pool is not None:
             # We should also transfer draft model kv cache. The indices are
             # always shared with a target model.
