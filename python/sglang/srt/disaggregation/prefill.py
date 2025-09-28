@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import KVCache
 
 logger = logging.getLogger(__name__)
-trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{torch.cuda.current_device()}")
+trace_logger = None
 
 class PrefillBootstrapQueue:
     """
@@ -123,8 +123,8 @@ class PrefillBootstrapQueue:
         kv_data_ptrs, kv_data_lens, kv_item_lens = (
             self.token_to_kv_pool.get_contiguous_buf_infos()
         )
-        trace_logger.log_file = f"events_P_{self.scheduler.dp_rank}.log"
-
+        global trace_logger
+        trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{kv_args.gpu_id}")
         if self.draft_token_to_kv_pool is not None:
             # We should also transfer draft model kv cache. The indices are
             # always shared with a target model.

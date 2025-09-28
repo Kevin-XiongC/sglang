@@ -55,7 +55,7 @@ from sglang.srt.utils import get_int_env_var, require_mlp_sync
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 
 logger = logging.getLogger(__name__)
-trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{torch.cuda.current_device()}")
+trace_logger = None
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
@@ -196,7 +196,8 @@ class DecodePreallocQueue:
         # Note(shangming): pp is not supported on the decode side yet, so its rank is fixed to 0
         kv_args.pp_rank = 0
         kv_args.system_dp_rank = self.scheduler.dp_rank
-        trace_logger.log_file = f"events_D_{self.scheduler.dp_rank}.log"
+        global trace_logger
+        trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{kv_args.gpu_id}")
         kv_args.prefill_pp_size = self.prefill_pp_size
         kv_data_ptrs, kv_data_lens, kv_item_lens = (
             self.token_to_kv_pool.get_contiguous_buf_infos()
