@@ -105,13 +105,18 @@ def run_server(
     print(f"blocks_per_layer={blocks_per_layer}")
     print(f"block_size_bytes={block_size_bytes/1024:.1f}KB")
 
-    # Send KV cache metadata via ZMQ
+    # Start ZMQ REP server to serve metadata to multiple clients
     if zmq_push_bind is not None:
         if zmq is None:
             raise RuntimeError("pyzmq is required when --zmq-push-bind is specified")
+        
+        # Convert PUSH bind address to REP bind address
+        rep_bind = zmq_push_bind.replace("tcp://*:", "tcp://*:").replace("tcp://", "tcp://")
+        
         context = zmq.Context.instance()
-        socket = context.socket(zmq.PUSH)
-        socket.bind(zmq_push_bind)
+        socket = context.socket(zmq.REP)
+        socket.bind(rep_bind)
+        
         md = {
             "session_id": engine.session_id,
             "kv_layers": kv_layers,
@@ -120,16 +125,27 @@ def run_server(
             "block_size_bytes": block_size_bytes,
             "layer_ptrs": layer_ptrs,
         }
-        socket.send_string(json.dumps(md))
-        print(f"ZMQ PUSH sent KV cache metadata to {zmq_push_bind}")
-
-    print("Keep this process running while client is benchmarking...")
-
-    try:
-        while True:
-            time.sleep(1.0)
-    except KeyboardInterrupt:
-        pass
+        
+        print(f"ZMQ REP server bound at {rep_bind}")
+        print("Waiting for client connections...")
+        
+        try:
+            while True:
+                # Wait for client request
+                request = socket.recv_string()
+                print(f"Client connected: {request}")
+                
+                # Send metadata to client
+                socket.send_string(json.dumps(md))
+                print("Metadata sent to client")
+                
+        except KeyboardInterrupt:
+            print("Server shutting down...")
+        finally:
+            socket.close()
+            context.term()
+    else:
+        print("No ZMQ bind address specified, server exiting...")
 
 
 def run_client(
@@ -143,20 +159,26 @@ def run_client(
     zmq_pull_connect: Optional[str],
     use_random_blocks: bool,
 ):
-    # Get KV cache metadata via ZMQ
+    # Get KV cache metadata via ZMQ REQ
     if zmq_pull_connect is None:
         raise ValueError("--zmq-pull-connect is required for client role")
     if zmq is None:
         raise RuntimeError("pyzmq is required when --zmq-pull-connect is specified")
     
     context = zmq.Context.instance()
-    socket = context.socket(zmq.PULL)
+    socket = context.socket(zmq.REQ)
     socket.connect(zmq_pull_connect)
+    
+    # Send request and receive metadata
+    socket.send_string("request_metadata")
     msg = socket.recv_string()
     try:
         md = json.loads(msg)
     except Exception as e:
         raise RuntimeError(f"Failed to parse ZMQ metadata: {e}")
+    finally:
+        socket.close()
+        context.term()
     
     session_id = md["session_id"]
     kv_layers = md["kv_layers"]
@@ -257,12 +279,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kv-layers", type=int, default=61, help="Number of KV cache layers to allocate (server only)")
     parser.add_argument("--layer-size-bytes", type=int, default=64 * 1024 * 1024, help="Size of each KV cache layer in bytes (server only)")
     parser.add_argument("--blocks-per-layer", type=int, default=64, help="Number of blocks per layer (server only)")
-    parser.add_argument("--zmq-push-bind", type=str, default=None, help="ZMQ PUSH bind address, e.g. tcp://*:5555 (server only)")
+    parser.add_argument("--zmq-push-bind", type=str, default=None, help="ZMQ REP bind address, e.g. tcp://*:5555 (server only)")
     
     # Client arguments
     parser.add_argument("--random-blocks", type=int, default=20, help="Number of random blocks to transfer per iteration (client only)")
     parser.add_argument("--duration", type=float, default=10.0, help="Benchmark duration in seconds (client only)")
-    parser.add_argument("--zmq-pull-connect", type=str, default=None, help="ZMQ PULL connect address, e.g. tcp://10.0.0.1:5555 (client only)")
+    parser.add_argument("--zmq-pull-connect", type=str, default=None, help="ZMQ REQ connect address, e.g. tcp://10.0.0.1:5555 (client only)")
     parser.add_argument("--warmup-iters", type=int, default=3, help="Number of warmup iterations (client only)")
     parser.add_argument("--report-interval", type=float, default=1.0, help="Progress report interval in seconds (client only)")
     parser.add_argument("--use-random-blocks", action="store_true", help="Use random blocks to transfer per iteration (client only)")
