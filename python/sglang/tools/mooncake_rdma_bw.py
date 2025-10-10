@@ -141,6 +141,7 @@ def run_client(
     warmup_iters: int,
     report_interval_sec: float,
     zmq_pull_connect: Optional[str],
+    use_random_blocks: bool,
 ):
     # Get KV cache metadata via ZMQ
     if zmq_pull_connect is None:
@@ -181,13 +182,13 @@ def run_client(
     def get_random_blocks():
         """Generate random block selections across all layers."""
         selected_blocks = []
-        for _ in range(random_blocks):
-            layer_idx = random.randint(0, kv_layers - 1)
-            block_idx = random.randint(0, blocks_per_layer - 1)
-            layer_ptr = layer_ptrs[layer_idx]
-            block_offset = block_idx * block_size_bytes
-            block_ptr = layer_ptr + block_offset
-            selected_blocks.append((layer_idx, block_idx, block_ptr))
+        for layer_idx in range(kv_layers):
+            for _ in range(random_blocks):
+                block_idx = random.randint(0, blocks_per_layer - 1) if use_random_blocks else list(range(random_blocks))
+                layer_ptr = layer_ptrs[layer_idx]
+                block_offset = block_idx * block_size_bytes
+                block_ptr = layer_ptr + block_offset
+                selected_blocks.append((layer_idx, block_idx, block_ptr))
         return selected_blocks
 
     # Warmup
@@ -264,6 +265,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--zmq-pull-connect", type=str, default=None, help="ZMQ PULL connect address, e.g. tcp://10.0.0.1:5555 (client only)")
     parser.add_argument("--warmup-iters", type=int, default=3, help="Number of warmup iterations (client only)")
     parser.add_argument("--report-interval", type=float, default=1.0, help="Progress report interval in seconds (client only)")
+    parser.add_argument("--use-random-blocks", type=bool, action="store_true", help="Use random blocks to transfer per iteration (client only)")
 
     return parser.parse_args()
 
@@ -300,6 +302,7 @@ def main():
         warmup_iters=args.warmup_iters,
         report_interval_sec=args.report_interval,
         zmq_pull_connect=args.zmq_pull_connect,
+        use_random_blocks=args.use_random_blocks,
     )
 
 
