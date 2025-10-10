@@ -183,8 +183,8 @@ def run_client(
         """Generate random block selections across all layers."""
         selected_blocks = []
         for layer_idx in range(kv_layers):
-            for _ in range(random_blocks):
-                block_idx = random.randint(0, blocks_per_layer - 1) if use_random_blocks else list(range(random_blocks))
+            for i in range(random_blocks):
+                block_idx = random.randint(0, blocks_per_layer - 1) if use_random_blocks else i
                 layer_ptr = layer_ptrs[layer_idx]
                 block_offset = block_idx * block_size_bytes
                 block_ptr = layer_ptr + block_offset
