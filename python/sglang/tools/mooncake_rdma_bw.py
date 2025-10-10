@@ -265,7 +265,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--zmq-pull-connect", type=str, default=None, help="ZMQ PULL connect address, e.g. tcp://10.0.0.1:5555 (client only)")
     parser.add_argument("--warmup-iters", type=int, default=3, help="Number of warmup iterations (client only)")
     parser.add_argument("--report-interval", type=float, default=1.0, help="Progress report interval in seconds (client only)")
-    parser.add_argument("--use-random-blocks", type=bool, action="store_true", help="Use random blocks to transfer per iteration (client only)")
+    parser.add_argument("--use-random-blocks", action="store_true", help="Use random blocks to transfer per iteration (client only)")
 
     return parser.parse_args()
 
