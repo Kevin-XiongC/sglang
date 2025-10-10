@@ -51,6 +51,7 @@ from typing import Optional, Tuple, List
 import json
 
 import torch
+import multiprocessing as mp
 
 try:
     import zmq  # Optional, only used when ZMQ options provided
@@ -64,8 +65,8 @@ from sglang.srt.disaggregation.mooncake.transfer_engine import (
 
 def allocate_cuda_buffer(size_bytes: int) -> Tuple[int, torch.Tensor]:
     """Allocate CUDA buffer and return (ptr, tensor)."""
-    num_elems = (size_bytes + 3) // 4
-    tensor = torch.empty(num_elems, dtype=torch.int32, device="cuda")
+    num_elems = (size_bytes + 1) // 2
+    tensor = torch.empty(num_elems, dtype=torch.bfloat16, device="cuda")
     ptr = tensor.data_ptr()
     return ptr, tensor
 
@@ -85,6 +86,11 @@ def run_server(
     blocks_per_layer: int,
     zmq_push_bind: Optional[str],
 ):
+    # Bind current process to the specified GPU
+    try:
+        torch.cuda.set_device(gpu_id)
+    except Exception:
+        pass
     engine = MooncakeTransferEngine(hostname=host, gpu_id=gpu_id, ib_device=ib_device)
 
     # Allocate KV cache layers
@@ -104,6 +110,7 @@ def run_server(
     print(f"layer_size_bytes={layer_size_bytes/1024:.1f}KB")
     print(f"blocks_per_layer={blocks_per_layer}")
     print(f"block_size_bytes={block_size_bytes/1024:.1f}KB")
+    print(f"block_size= {block_size_bytes/576/2:.1f}")
 
     # Start ZMQ REP server to serve metadata to multiple clients
     if zmq_push_bind is not None:
@@ -159,6 +166,11 @@ def run_client(
     zmq_pull_connect: Optional[str],
     use_random_blocks: bool,
 ):
+    # Bind current process to the specified GPU
+    try:
+        torch.cuda.set_device(gpu_id)
+    except Exception:
+        pass
     # Get KV cache metadata via ZMQ REQ
     if zmq_pull_connect is None:
         raise ValueError("--zmq-pull-connect is required for client role")
@@ -185,7 +197,7 @@ def run_client(
     layer_size_bytes = md["layer_size_bytes"]
     blocks_per_layer = md["blocks_per_layer"]
     block_size_bytes = md["block_size_bytes"]
-    layer_ptrs = [int(x) for x in md["layer_ptrs"]]
+    dst_layer_ptrs = [int(x) for x in md["layer_ptrs"]]
     
     print(f"Received KV cache metadata: {kv_layers} layers, {layer_size_bytes/1024:.1f}KB each")
     print(f"Blocks per layer: {blocks_per_layer}, block size: {block_size_bytes/1024:.1f}KB")
@@ -193,33 +205,52 @@ def run_client(
 
     engine = MooncakeTransferEngine(hostname=host, gpu_id=gpu_id, ib_device=ib_device)
 
+    src_layer_ptrs = []
+    src_layer_holders = []
     # Allocate source buffer for transfers
-    src_ptr, src_holder = allocate_cuda_buffer(block_size_bytes)
-    engine.register(src_ptr, block_size_bytes)
+    for layer_idx in range(kv_layers):
+        ptr, holder = allocate_cuda_buffer(layer_size_bytes)
+        engine.register(ptr, layer_size_bytes)
+        src_layer_ptrs.append(ptr)
+        src_layer_holders.append(holder)
     
     # Initialize source buffer
-    src_holder.fill_(0x7F7F7F7F)
-    torch.cuda.synchronize()
+    for layer_holder in src_layer_holders:
+        layer_holder.fill_(233)
+
 
     def get_random_blocks():
-        """Generate random block selections across all layers."""
+        # 先重建一份新的索引列表
+        block_idxs = [random.randint(0, blocks_per_layer - 1) for _ in range(random_blocks)]
+
         selected_blocks = []
         for layer_idx in range(kv_layers):
-            for i in range(random_blocks):
-                block_idx = random.randint(0, blocks_per_layer - 1) if use_random_blocks else i
-                layer_ptr = layer_ptrs[layer_idx]
-                block_offset = block_idx * block_size_bytes
-                block_ptr = layer_ptr + block_offset
-                selected_blocks.append((layer_idx, block_idx, block_ptr))
-        return selected_blocks
+            if use_random_blocks:
+                for i in range(random_blocks):
+                    dst_layer_ptr = dst_layer_ptrs[layer_idx]
+                    block_offset = block_idxs[i] * block_size_bytes
+                    block_ptr = dst_layer_ptr + block_offset
+                    src_layer_ptr = src_layer_ptrs[layer_idx]
+                    src_block_ptr = src_layer_ptr + block_offset
+                    selected_blocks.append((src_block_ptr, block_ptr))
+            else:
+                dst_layer_ptr = dst_layer_ptrs[layer_idx]
+                src_layer_ptr = src_layer_ptrs[layer_idx]
+                selected_blocks.append((src_layer_ptr, dst_layer_ptr))
+        return selected_blocks,block_idxs
 
     # Warmup
     for _ in range(max(0, warmup_iters)):
-        blocks = get_random_blocks()
-        for layer_idx, block_idx, block_ptr in blocks:
-            ret = engine.transfer_sync(session_id, src_ptr, block_ptr, block_size_bytes)
-            if ret < 0:
-                raise RuntimeError("Warmup transfer failed")
+        blocks,_ = get_random_blocks()
+        # for src_ptr, dst_ptr in blocks:
+        #         ret = engine.transfer_sync(session_id, src_ptr, dst_ptr, block_size_bytes)
+        #         if ret < 0:
+        #             raise RuntimeError("Warmup transfer failed")
+
+        ret = engine.batch_transfer_sync(session_id, [src_ptr for src_ptr, _ in blocks], [dst_ptr for _, dst_ptr in blocks], [block_size_bytes] * len(blocks))
+        if ret < 0:
+            raise RuntimeError("Warmup transfer failed")
+        
 
     torch.cuda.synchronize()
 
@@ -232,12 +263,15 @@ def run_client(
     print("Starting random KV cache block transfers...")
     while True:
         # Randomly select N blocks from any layers
-        blocks = get_random_blocks()
+        blocks,block_idxs = get_random_blocks()
         
-        for layer_idx, block_idx, block_ptr in blocks:
-            ret = engine.transfer_sync(session_id, src_ptr, block_ptr, block_size_bytes)
-            if ret < 0:
-                raise RuntimeError("transfer_sync failed")
+        # for src_ptr, dst_ptr in blocks:
+        #     ret = engine.transfer_sync(session_id, src_ptr, dst_ptr, block_size_bytes)
+        #     if ret < 0:
+        #         raise RuntimeError("transfer_sync failed")
+        # print(f"Transferring {block_idxs}")
+
+        ret = engine.batch_transfer_sync(session_id, [src_ptr for src_ptr, _ in blocks], [dst_ptr for _, dst_ptr in blocks], [block_size_bytes] * len(blocks))
         
         total_bytes += block_size_bytes * random_blocks
         transfer_count += 1
@@ -247,7 +281,6 @@ def run_client(
             break
         if report_interval_sec > 0 and (now - last_report) >= report_interval_sec:
             bps = total_bytes / (now - t0)
-            print(f"[progress] {human_bandwidth(bps)} over {now - t0:.2f}s, transfers={transfer_count}")
             last_report = now
 
     torch.cuda.synchronize()
@@ -265,7 +298,7 @@ def run_client(
     print(f"transfers={transfer_count}")
     print(f"total_blocks_transferred={transfer_count * random_blocks}")
     print(f"bytes_transferred={total_bytes}")
-    print(f"bandwidth={human_bandwidth(bps)}")
+    # print(f"bandwidth={human_bandwidth(bps)}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -280,14 +313,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--layer-size-bytes", type=int, default=64 * 1024 * 1024, help="Size of each KV cache layer in bytes (server only)")
     parser.add_argument("--blocks-per-layer", type=int, default=64, help="Number of blocks per layer (server only)")
     parser.add_argument("--zmq-push-bind", type=str, default=None, help="ZMQ REP bind address, e.g. tcp://*:5555 (server only)")
+    parser.add_argument("--server-gpus", type=str, default=None, help="Comma-separated GPU ids to run servers concurrently (server only)")
     
     # Client arguments
     parser.add_argument("--random-blocks", type=int, default=20, help="Number of random blocks to transfer per iteration (client only)")
     parser.add_argument("--duration", type=float, default=10.0, help="Benchmark duration in seconds (client only)")
     parser.add_argument("--zmq-pull-connect", type=str, default=None, help="ZMQ REQ connect address, e.g. tcp://10.0.0.1:5555 (client only)")
+    parser.add_argument("--zmq-pull-prefix", type=str, default=None, help="ZMQ REQ connect address prefix for multi-GPU; base port will be incremented per GPU, e.g. tcp://10.0.0.1:5555 -> 5556,5557... (client only)")
     parser.add_argument("--warmup-iters", type=int, default=3, help="Number of warmup iterations (client only)")
     parser.add_argument("--report-interval", type=float, default=1.0, help="Progress report interval in seconds (client only)")
     parser.add_argument("--use-random-blocks", action="store_true", help="Use random blocks to transfer per iteration (client only)")
+    parser.add_argument("--gpus", type=str, default=None, help="Comma-separated GPU ids to run clients concurrently (client only)")
 
     return parser.parse_args()
 
@@ -299,15 +335,63 @@ def main():
         if args.zmq_push_bind is None:
             print("--zmq-push-bind is required for server role", file=sys.stderr)
             sys.exit(2)
-        run_server(
-            host=args.host,
-            gpu_id=args.gpu_id,
-            ib_device=args.ib_device,
-            kv_layers=args.kv_layers,
-            layer_size_bytes=args.layer_size_bytes,
-            blocks_per_layer=args.blocks_per_layer,
-            zmq_push_bind=args.zmq_push_bind,
-        )
+
+        if args.server_gpus:
+            try:
+                gpu_list = [int(x.strip()) for x in args.server_gpus.split(",") if x.strip()]
+            except Exception:
+                print("--server-gpus must be a comma-separated list of integers, e.g. 0,1,2,3", file=sys.stderr)
+                sys.exit(2)
+
+            # derive per-GPU bind addresses by incrementing port
+            if not args.zmq_push_bind.startswith("tcp://") or ":" not in args.zmq_push_bind:
+                print("--zmq-push-bind must be like tcp://*:5555", file=sys.stderr)
+                sys.exit(2)
+            base_host_port = args.zmq_push_bind.split("tcp://", 1)[1]
+            host_part, port_part = base_host_port.rsplit(":", 1)
+            try:
+                base_port = int(port_part)
+            except Exception:
+                print("--zmq-push-bind port must be integer", file=sys.stderr)
+                sys.exit(2)
+
+            processes: List[mp.Process] = []
+            ctx = mp.get_context("spawn")
+            for idx, gid in enumerate(gpu_list):
+                bind_addr = f"tcp://{host_part}:{base_port + idx}"
+                p = ctx.Process(
+                    target=run_server,
+                    args=(
+                        args.host,
+                        gid,
+                        args.ib_device,
+                        args.kv_layers,
+                        args.layer_size_bytes,
+                        args.blocks_per_layer,
+                        bind_addr,
+                    ),
+                )
+                p.start()
+                processes.append(p)
+
+            # Wait children
+            exit_code = 0
+            for p in processes:
+                p.join()
+                if p.exitcode != 0:
+                    exit_code = p.exitcode
+            if exit_code != 0:
+                sys.exit(exit_code)
+        else:
+            run_server(
+                host=args.host,
+                gpu_id=args.gpu_id,
+                ib_device=args.ib_device,
+                kv_layers=args.kv_layers,
+                layer_size_bytes=args.layer_size_bytes,
+                blocks_per_layer=args.blocks_per_layer,
+                zmq_push_bind=args.zmq_push_bind,
+            )
         return
 
     # client
@@ -315,17 +399,75 @@ def main():
         print("--zmq-pull-connect is required for client role", file=sys.stderr)
         sys.exit(2)
 
-    run_client(
-        host=args.host,
-        gpu_id=args.gpu_id,
-        ib_device=args.ib_device,
-        random_blocks=args.random_blocks,
-        duration_sec=args.duration,
-        warmup_iters=args.warmup_iters,
-        report_interval_sec=args.report_interval,
-        zmq_pull_connect=args.zmq_pull_connect,
-        use_random_blocks=args.use_random_blocks,
-    )
+    if args.gpus:
+        # Run one client process per GPU id
+        try:
+            gpu_list = [int(x.strip()) for x in args.gpus.split(",") if x.strip()]
+        except Exception:
+            print("--gpus must be a comma-separated list of integers, e.g. 0,1,2,3", file=sys.stderr)
+            sys.exit(2)
+
+        processes: List[mp.Process] = []
+        ctx = mp.get_context("spawn")
+        # derive per-GPU connect addresses by incrementing port if prefix provided
+        connect_addrs: List[str] = []
+        if args.zmq_pull_prefix:
+            if not args.zmq_pull_prefix.startswith("tcp://") or ":" not in args.zmq_pull_prefix:
+                print("--zmq-pull-prefix must be like tcp://10.0.0.1:5555", file=sys.stderr)
+                sys.exit(2)
+            base_host_port = args.zmq_pull_prefix.split("tcp://", 1)[1]
+            host_part, port_part = base_host_port.rsplit(":", 1)
+            try:
+                base_port = int(port_part)
+            except Exception:
+                print("--zmq-pull-prefix port must be integer", file=sys.stderr)
+                sys.exit(2)
+            for idx, _ in enumerate(gpu_list):
+                connect_addrs.append(f"tcp://{host_part}:{base_port + idx}")
+        else:
+            if args.zmq_pull_connect is None:
+                print("--zmq-pull-connect or --zmq-pull-prefix is required when using --gpus", file=sys.stderr)
+                sys.exit(2)
+            connect_addrs = [args.zmq_pull_connect for _ in gpu_list]
+
+        for idx, gid in enumerate(gpu_list):
+            p = ctx.Process(
+                target=run_client,
+                args=(
+                    args.host,
+                    gid,
+                    args.ib_device,
+                    args.random_blocks,
+                    args.duration,
+                    args.warmup_iters,
+                    args.report_interval,
+                    connect_addrs[idx],
+                    args.use_random_blocks,
+                ),
+            )
+            p.start()
+            processes.append(p)
+
+        # Wait for all
+        exit_code = 0
+        for p in processes:
+            p.join()
+            if p.exitcode != 0:
+                exit_code = p.exitcode
+        if exit_code != 0:
+            sys.exit(exit_code)
+    else:
+        run_client(
+            host=args.host,
+            gpu_id=args.gpu_id,
+            ib_device=args.ib_device,
+            random_blocks=args.random_blocks,
+            duration_sec=args.duration,
+            warmup_iters=args.warmup_iters,
+            report_interval_sec=args.report_interval,
+            zmq_pull_connect=args.zmq_pull_connect,
+            use_random_blocks=args.use_random_blocks,
+        )
 
 
 if __name__ == "__main__":
