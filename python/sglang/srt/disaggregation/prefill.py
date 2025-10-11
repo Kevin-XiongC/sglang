@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, List, Optional, Type
 
 import torch
 
+import sglang.srt.disaggregation.trace_utils as trace_utils
 from sglang.srt.disaggregation.base import BaseKVManager, KVPoll
 from sglang.srt.disaggregation.utils import (
     FAKE_BOOTSTRAP_HOST,
@@ -64,7 +65,7 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import KVCache
 
 logger = logging.getLogger(__name__)
-
+trace_logger = trace_utils.get_event_logger()
 
 class PrefillBootstrapQueue:
     """
@@ -122,6 +123,7 @@ class PrefillBootstrapQueue:
         kv_data_ptrs, kv_data_lens, kv_item_lens = (
             self.token_to_kv_pool.get_contiguous_buf_infos()
         )
+        trace_logger.log_file = f"events_P_{self.scheduler.dp_rank}.log"
 
         if self.draft_token_to_kv_pool is not None:
             # We should also transfer draft model kv cache. The indices are
@@ -178,6 +180,7 @@ class PrefillBootstrapQueue:
         self._process_req(req)
         req.add_latency(RequestStage.PREFILL_PREPARE)
         self.queue.append(req)
+        trace_logger.mark(req.bootstrap_room, "prefill_bootstrap_queue_add")
 
     def extend(self, reqs: List[Req], num_kv_heads: int) -> None:
         for req in reqs:
@@ -268,6 +271,7 @@ class PrefillBootstrapQueue:
             indices_to_remove.add(i)
             req.time_stats.wait_queue_entry_time = time.perf_counter()
             req.add_latency(RequestStage.PREFILL_BOOTSTRAP)
+            trace_logger.mark(req.bootstrap_room, "PREFILL_BOOTSTRAP")
 
         self.queue = [
             entry for i, entry in enumerate(self.queue) if i not in indices_to_remove
@@ -400,6 +404,7 @@ class SchedulerDisaggregationPrefillMixin:
                 # There is no output_ids for prefill
                 req.output_ids.append(next_token_id)
                 self.tree_cache.cache_unfinished_req(req)  # update the tree and lock
+                trace_logger.mark(req.bootstrap_room, "PREFILL_FORWARD")
                 req.add_latency(RequestStage.PREFILL_FORWARD)
                 self.disagg_prefill_inflight_queue.append(req)
                 if (
@@ -546,6 +551,7 @@ class SchedulerDisaggregationPrefillMixin:
         for req in done_reqs:
             req: Req
             req.add_latency(RequestStage.PREFILL_TRANSFER_KV_CACHE)
+            trace_logger.mark(req.bootstrap_room, "PREFILL_TRANSFER_KV_CACHE")
             self.req_to_metadata_buffer_idx_allocator.free(req.metadata_buffer_index)
             req.metadata_buffer_index = -1
 
