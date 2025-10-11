@@ -697,7 +697,7 @@ class DecodeTransferQueue:
             assert idx != -1
             self.queue[i].req.add_latency(RequestStage.DECODE_TRANSFERRED)
             self.req_to_metadata_buffer_idx_allocator.free(idx)
-            trace_logger.mark(decode_req.req.bootstrap_room, "decode_transferred_queue_pop")
+            trace_logger.mark(self.queue[i].req.bootstrap_room, "decode_transferred_queue_pop")
 
         self.queue = [
             entry for i, entry in enumerate(self.queue) if i not in indices_to_remove
