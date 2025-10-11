@@ -55,6 +55,8 @@ from sglang.srt.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils import get_int_env_var, require_mlp_sync
 
 logger = logging.getLogger(__name__)
+import sglang.srt.disaggregation.trace_utils as trace_utils
+trace_logger = None
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
@@ -195,6 +197,8 @@ class DecodePreallocQueue:
         # Note(shangming): pp is not supported on the decode side yet, so its rank is fixed to 0
         kv_args.pp_rank = 0
         kv_args.system_dp_rank = self.scheduler.dp_rank
+        global trace_logger
+        trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{self.scheduler.dp_rank}")
         kv_args.prefill_pp_size = self.prefill_pp_size
         kv_data_ptrs, kv_data_lens, kv_item_lens = (
             self.token_to_kv_pool.get_contiguous_buf_infos()
@@ -255,6 +259,7 @@ class DecodePreallocQueue:
             )
 
             req.add_latency(RequestStage.DECODE_PREPARE)
+            trace_logger.mark(req.bootstrap_room, "decode_add_prealloc_queue")
             self.queue.append(
                 DecodeRequest(req=req, kv_receiver=kv_receiver, waiting_for_input=False)
             )
@@ -430,6 +435,7 @@ class DecodePreallocQueue:
                 time.perf_counter()
             )
             decode_req.req.add_latency(RequestStage.DECODE_BOOTSTRAP)
+            trace_logger.mark(decode_req.req.bootstrap_room, "decode_bootstrap_queue_pop")
 
         self.queue = [
             entry for i, entry in enumerate(self.queue) if i not in indices_to_remove
@@ -691,6 +697,7 @@ class DecodeTransferQueue:
             assert idx != -1
             self.queue[i].req.add_latency(RequestStage.DECODE_TRANSFERRED)
             self.req_to_metadata_buffer_idx_allocator.free(idx)
+            trace_logger.mark(decode_req.req.bootstrap_room, "decode_transferred_queue_pop")
 
         self.queue = [
             entry for i, entry in enumerate(self.queue) if i not in indices_to_remove

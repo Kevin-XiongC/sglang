@@ -36,7 +36,8 @@ from sglang.srt.utils import (
     get_int_env_var,
     is_valid_ipv6_address,
 )
-
+import sglang.srt.disaggregation.trace_utils as trace_utils
+trace_logger = None
 logger = logging.getLogger(__name__)
 
 
@@ -225,6 +226,8 @@ class MooncakeKVManager(CommonKVManager):
             gpu_id=self.kv_args.gpu_id,
             ib_device=self.kv_args.ib_device,
         )
+        global trace_logger
+        trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{self.kv_args.gpu_id}")
 
     def register_buffer_to_engine(self):
         # Batch register KV data buffers
@@ -667,6 +670,7 @@ class MooncakeKVManager(CommonKVManager):
                                 chunked_dst_kv_indice,
                                 executor,
                             )
+                            trace_logger.mark(req.room, "prefill_start_send_kvcache")
                         else:
                             ret = self.send_kvcache_slice(
                                 req.mooncake_session_id,
@@ -722,6 +726,7 @@ class MooncakeKVManager(CommonKVManager):
                                     self.sync_status_to_decode_endpoint(
                                         endpoint, dst_port, room, status, local_rank
                                     )
+                                    trace_logger.mark(room, "prefill_send_kvcache_done")
                     else:
                         # Dummy request means the decode instance is not used, so its status can be marked as success directly
                         # Dummy request does not need to sync status to decode endpoint
@@ -776,6 +781,7 @@ class MooncakeKVManager(CommonKVManager):
                     # NOTE: after bootstrapping we can mark the req as waiting for input
                     if len(self.transfer_infos[room]) == required_dst_info_num:
                         self.update_status(room, KVPoll.WaitingForInput)
+                        trace_logger.mark(room, "prefill_bootstrap_done")
 
         threading.Thread(target=bootstrap_thread).start()
 
@@ -805,6 +811,7 @@ class MooncakeKVManager(CommonKVManager):
                         )
                         if arrived_response_num == expected_response_num:
                             self.update_status(bootstrap_room, KVPoll.Success)
+                            trace_logger.mark(bootstrap_room, "decode_transferred_done")
                 elif status == KVPoll.Failed:
                     self.record_failure(
                         bootstrap_room,

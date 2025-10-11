@@ -64,6 +64,8 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import KVCache
 
 logger = logging.getLogger(__name__)
+import sglang.srt.disaggregation.trace_utils as trace_utils
+trace_logger = None
 
 
 class PrefillBootstrapQueue:
@@ -122,6 +124,8 @@ class PrefillBootstrapQueue:
         kv_data_ptrs, kv_data_lens, kv_item_lens = (
             self.token_to_kv_pool.get_contiguous_buf_infos()
         )
+        global trace_logger
+        trace_logger = trace_utils.get_event_logger(log_file=f"events_log_{self.scheduler.dp_rank}")
 
         if self.draft_token_to_kv_pool is not None:
             # We should also transfer draft model kv cache. The indices are
@@ -177,6 +181,7 @@ class PrefillBootstrapQueue:
         )
         self._process_req(req)
         req.add_latency(RequestStage.PREFILL_PREPARE)
+        trace_logger.mark(req.bootstrap_room, "prefill_add_bootstrap_queue")
         self.queue.append(req)
 
     def extend(self, reqs: List[Req], num_kv_heads: int) -> None:
@@ -268,6 +273,7 @@ class PrefillBootstrapQueue:
             indices_to_remove.add(i)
             req.time_stats.wait_queue_entry_time = time.perf_counter()
             req.add_latency(RequestStage.PREFILL_BOOTSTRAP)
+            trace_logger.mark(req.bootstrap_room, "prefill_bootstrap_queue_pop")
 
         self.queue = [
             entry for i, entry in enumerate(self.queue) if i not in indices_to_remove
@@ -401,6 +407,7 @@ class SchedulerDisaggregationPrefillMixin:
                 req.output_ids.append(next_token_id)
                 self.tree_cache.cache_unfinished_req(req)  # update the tree and lock
                 req.add_latency(RequestStage.PREFILL_FORWARD)
+                trace_logger.mark(req.bootstrap_room, "prefill_forward_done")
                 self.disagg_prefill_inflight_queue.append(req)
                 if (
                     logits_output is not None
@@ -548,6 +555,7 @@ class SchedulerDisaggregationPrefillMixin:
             req.add_latency(RequestStage.PREFILL_TRANSFER_KV_CACHE)
             self.req_to_metadata_buffer_idx_allocator.free(req.metadata_buffer_index)
             req.metadata_buffer_index = -1
+            trace_logger.mark(req.bootstrap_room, "prefill_inflight_queue_done")
 
         self.disagg_prefill_inflight_queue = undone_reqs
 
