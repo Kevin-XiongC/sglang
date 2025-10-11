@@ -721,6 +721,7 @@ class MooncakeKVManager(CommonKVManager):
                             if len(polls) == req.required_dst_info_num:
                                 status = KVPoll.Success if all(polls) else KVPoll.Failed
                                 self.update_status(req.room, status)
+                                trace_logger.mark(req.room, "prefill_send_kv_update_status")
                                 for endpoint, dst_port, room in dst_ranks_infos:
                                     self.sync_status_to_decode_endpoint(
                                         endpoint, dst_port, room, status, local_rank
