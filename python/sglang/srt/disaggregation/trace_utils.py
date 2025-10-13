@@ -23,7 +23,7 @@ class _EventContext:
         self.logger.setLevel(logging.INFO)
         
         if not self.logger.handlers:
-            file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
+            file_handler = logging.FileHandler(self.log_file, mode='w', encoding='utf-8')
             formatter = logging.Formatter('%(message)s')
             file_handler.setFormatter(formatter)
             self.logger.addHandler(file_handler)
