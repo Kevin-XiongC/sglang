@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7" TORCH_CUDA_ARCH_LIST=9.0 \
     --host 0.0.0.0 --watchdog-timeout 1000000 \
     --tokenizer-worker-num 4 --disaggregation-mode prefill \
     --disaggregation-ib-device mlx5_1,mlx5_2,mlx5_3,mlx5_4 \
-    --context-length 262144 --max-prefill-tokens 32000 --chunked-prefill-size 32128 \
+    --context-length 131072 --max-prefill-tokens 32000 --chunked-prefill-size 32128 \
     --disable-radix-cache --tp-size 8 \
     --page-size 64 --max-running-requests 1024 --mem-fraction-static 0.90 \
     --load-balance-method round_robin  --load-format dummy 
@@ -26,7 +26,7 @@ CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7" TORCH_CUDA_ARCH_LIST=9.0 \
     --model-path /root/llama --served-model-name llama \
     --trust-remote-code --tokenizer-worker-num 4 \
     --disaggregation-mode decode --disaggregation-ib-device mlx5_1,mlx5_2,mlx5_3,mlx5_4 \
-    --disable-radix-cache --enable-dp-lm-head  \
+    --disable-radix-cache --enable-dp-lm-head --enable-dp-attention \
     --tp-size 8 --dp-size 8 \
     --page-size 64 --watchdog-timeout 1000000 --host 0.0.0.0  --chunked-prefill-size 6144 \
     --prefill-round-robin-balance --load-format dummy --mem-fraction-static 0.7  --max-running-requests 4096

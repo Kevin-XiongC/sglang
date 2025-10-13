@@ -778,6 +778,7 @@ class SchedulerDisaggregationDecodeMixin:
                     self.stream_output(
                         batch.reqs, any(req.return_logprob for req in batch.reqs)
                     )
+                    [trace_logger.mark(req.bootstrap_room, "decode_stream_output") for req in batch.reqs]
                     if prepare_mlp_sync_flag:
                         batch_, result = self._prepare_idle_batch_and_run(
                             None, delay_process=True
