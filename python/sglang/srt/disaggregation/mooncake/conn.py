@@ -663,6 +663,8 @@ class MooncakeKVManager(CommonKVManager):
                             self.attn_tp_size
                             == target_rank_registration_info.dst_attn_tp_size
                         ):
+
+                            trace_logger.mark(req.room, "prefill_start_send_kvcache")
                             ret = self.send_kvcache(
                                 req.mooncake_session_id,
                                 kv_chunk.prefill_kv_indices,
@@ -670,8 +672,9 @@ class MooncakeKVManager(CommonKVManager):
                                 chunked_dst_kv_indice,
                                 executor,
                             )
-                            trace_logger.mark(req.room, "prefill_start_send_kvcache")
                         else:
+
+                            trace_logger.mark(req.room, "prefill_start_send_kvcache")
                             ret = self.send_kvcache_slice(
                                 req.mooncake_session_id,
                                 kv_chunk.prefill_kv_indices,
