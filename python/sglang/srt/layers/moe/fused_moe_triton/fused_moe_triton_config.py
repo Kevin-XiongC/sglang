@@ -52,11 +52,11 @@ def get_moe_configs(
     kernel on a given batch size bs, the closest batch size in the grid should
     be picked and the associated configuration chosen to invoke the kernel.
     """
-    if get_global_server_args().enable_deterministic_inference:
-        logger.warning(
-            "Deterministic inference is enabled, using default MoE kernel config."
-        )
-        return None
+    # if get_global_server_args().enable_deterministic_inference:
+    #     logger.warning(
+    #         "Deterministic inference is enabled, using default MoE kernel config."
+    #     )
+    #     return None
     # Supported Triton versions, should be sorted from the newest to the oldest
     supported_triton_versions = ["3.4.0", "3.3.1", "3.2.0", "3.1.0"]
 
