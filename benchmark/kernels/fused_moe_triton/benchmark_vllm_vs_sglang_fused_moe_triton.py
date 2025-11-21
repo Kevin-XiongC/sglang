@@ -297,7 +297,7 @@ def fused_moe_vllm_api(
         inputs.a1_scale,
         inputs.a2_scale,
         inputs.block_shape,
-        per_act_token_quant=False,
+        per_act_token_quant=True,
     )
 
     return fused_moe_vllm(
@@ -419,8 +419,8 @@ def benchmark(batch_size, provider, model_config, use_fp8_w8a8=False):
     hidden_size = model_config["hidden_size"]
     shard_intermediate_size = model_config["shard_intermediate_size"]
     topk = model_config["topk"]
-    dtype = torch.bfloat16
-    block_shape = [128,128]
+    dtype = model_config["dtype"]
+    block_shape = model_config["block_shape"]
     device = torch.device("cuda")
 
     # Prepare inputs
