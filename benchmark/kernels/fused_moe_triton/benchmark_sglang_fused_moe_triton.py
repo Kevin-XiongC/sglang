@@ -69,31 +69,36 @@ def fused_moe_sglang_api(
         router_logits=input_gating,
         topk_config=TopKConfig(top_k=topk, renormalize=False),
     )
+    moe_runner_config = MoeRunnerConfig(
+            inplace=True,
+        )
     return fused_moe_sglang(
         x,
         w1,
         w2,
         topk_output,
-        use_fp8_w8a8=use_fp8_w8a8,
+        moe_runner_config=moe_runner_config,
+        use_fp8_w8a8=True,
         w1_scale=w1_scale,
         w2_scale=w2_scale,
         a1_scale=a1_scale,
         a2_scale=a2_scale,
         block_shape=block_shape,
+        per_channel_quant=True,
     )
 
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=["batch_size"],
-        x_vals=list([128, 256, 512, 1024, 2048, 4096, 8192]),
+        x_vals=list([1,2,30,48,60,96,1536,8192]),
         line_arg="provider",
         line_vals=[
-            "sglang_fused_moe_triton_v340",
+            # "sglang_fused_moe_triton_v340",
             "sglang_fused_moe_triton",
         ],
         line_names=[
-            "sglang_fused_moe_triton_v340",
+            # "sglang_fused_moe_triton_v340",
             "sglang_fused_moe_triton",
         ],
         styles=[
@@ -121,7 +126,7 @@ def benchmark(
     hidden_size = model_config["hidden_size"]
     shard_intermediate_size = model_config["shard_intermediate_size"]
     topk = model_config["topk"]
-    dtype = model_config["dtype"]
+    dtype =  torch.float16
     block_shape = model_config["block_shape"]
 
     x = torch.randn(num_tokens, hidden_size, dtype=dtype)
@@ -138,6 +143,13 @@ def benchmark(
 
     input_gating = torch.randn(num_tokens, num_experts, dtype=torch.float32)
 
+
+    w1_scale = torch.randn(num_experts, dtype=torch.float32)
+    w2_scale = torch.randn(num_experts, dtype=torch.float32)
+    a1_scale = torch.randn(1, dtype=torch.float32)
+    a2_scale = torch.randn(1, dtype=torch.float32)
+    w1 = w1.to(torch.float8_e4m3fn)
+    w2 = w2.to(torch.float8_e4m3fn)
     if provider == "sglang_fused_moe_triton_v340":
         api_func = fused_moe_triton_api
         api_kwargs = {
@@ -156,7 +168,11 @@ def benchmark(
             "input_gating": input_gating,
             "topk": topk,
             "use_fp8_w8a8": use_fp8_w8a8,
-            "block_shape": block_shape,
+            "block_shape": None,
+            "w1_scale": w1_scale,
+            "w2_scale": w2_scale,
+            "a1_scale": a1_scale,
+            "a2_scale": a2_scale,
         }
 
     # Warmup
@@ -176,7 +192,7 @@ def benchmark(
         bench_lambda = lambda: api_func(**api_kwargs)
 
     quantiles = [0.5, 0.2, 0.8]
-    ms, min_ms, max_ms = triton.testing.do_bench(bench_lambda, quantiles=quantiles)
+    ms, min_ms, max_ms = triton.testing.do_bench_cudagraph(bench_lambda, quantiles=quantiles)
     return ms, min_ms, max_ms
 
 
@@ -217,8 +233,8 @@ def main():
         )
 
         initialize_model_parallel(
-            tensor_model_parallel_size=args.ep_size,
-            pipeline_model_parallel_size=args.tp_size,
+            tensor_model_parallel_size=1,
+            pipeline_model_parallel_size=1,
         )
 
         model_config = get_model_config(args.model, args.tp_size, args.ep_size)

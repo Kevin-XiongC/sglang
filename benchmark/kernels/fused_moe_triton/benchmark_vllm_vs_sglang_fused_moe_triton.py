@@ -385,8 +385,8 @@ def prepare_weights_and_scales(
 PROVIDER_FUNCTIONS: Dict[str, Callable] = {
     "vllm_fused_moe_triton": fused_moe_vllm_api,
     "sglang_fused_moe_triton": fused_moe_sglang_api,
-    "cutlass_moe_fp8": fused_moe_cutlass_api,
-    "cutlass_w4a8_moe": fused_moe_cutlass_w4a8_api,
+    # "cutlass_moe_fp8": fused_moe_cutlass_api,
+    # "cutlass_w4a8_moe": fused_moe_cutlass_w4a8_api,
 }
 
 
@@ -419,8 +419,8 @@ def benchmark(batch_size, provider, model_config, use_fp8_w8a8=False):
     hidden_size = model_config["hidden_size"]
     shard_intermediate_size = model_config["shard_intermediate_size"]
     topk = model_config["topk"]
-    dtype = model_config["dtype"]
-    block_shape = model_config["block_shape"]
+    dtype = torch.bfloat16
+    block_shape = [128,128]
     device = torch.device("cuda")
 
     # Prepare inputs
