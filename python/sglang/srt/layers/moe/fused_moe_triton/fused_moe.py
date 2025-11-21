@@ -54,7 +54,11 @@ elif _is_hip:
     else:
         from vllm import _custom_ops as vllm_ops
 
+import logging
+logger = logging.getLogger(__name__)
+
 padding_size = 128 if bool(int(os.getenv("SGLANG_MOE_PADDING", "0"))) else 0
+
 
 
 def inplace_fused_experts(
@@ -250,7 +254,13 @@ direct_register_custom_op(
     fake_impl=outplace_fused_experts_fake,
 )
 
-
+USE_VLLM_FUSED_MOE_CONFIG = get_bool_env_var("USE_VLLM_FUSED_MOE_CONFIG")
+if USE_VLLM_FUSED_MOE_CONFIG:
+    from vllm.model_executor.layers.fused_moe.config import FusedMoEQuantConfig
+    from vllm.model_executor.layers.fused_moe.fused_moe import (
+        fused_experts as fused_moe_vllm,
+    )
+    logger.info("Using vLLM fused MoE config")
 def fused_experts(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -277,6 +287,33 @@ def fused_experts(
         moe_runner_config.num_experts is None
         or moe_runner_config.num_experts != moe_runner_config.num_local_experts
     )
+    if USE_VLLM_FUSED_MOE_CONFIG and use_fp8_w8a8:
+        config = FusedMoEQuantConfig.make(
+            quant_dtype=torch.float8_e4m3fn,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            a1_scale=a1_scale,
+            a2_scale=a2_scale,
+            per_act_token_quant=per_channel_quant,
+            block_shape=block_shape,
+        )
+
+        fused_moe_vllm(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            inplace=True,
+            apply_router_weight_on_input=moe_runner_config.apply_router_weight_on_input,
+            quant_config=config,
+        )
+        return hidden_states
+
+
+
+
+    
     if moe_runner_config.inplace:
         assert not moe_runner_config.no_combine, "no combine + inplace makes no sense"
         torch.ops.sglang.inplace_fused_experts(
